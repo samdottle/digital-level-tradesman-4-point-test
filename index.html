@@ -1,0 +1,1302 @@
+<!DOCTYPE html>
+<!-- v1.11 TEST CANDIDATE, 2026-11-24: Bubble Demo pointer handling only; based on v1.10 below. -->
+<!--
+  Digital Level Tradesman 4 Point -- Web App
+  Version: 1.10 (built on top of the locked Proto 1.0 -- not yet
+  re-locked; that's a separate, deliberate step once this is confirmed)
+  Date: 2026-07-27
+
+  New in v1.10: adds the Slope / Degree Calculator, ported from Digital
+  Level Tradesman (standard), where it already exists and works. Missing
+  from DLT4P was an oversight in how the 4-point UI was originally
+  built, not a deliberate omission -- flagged during a product
+  evaluation for Facilities Logistics, who received a prototype without
+  it.
+
+  Genuinely UI-only, as expected going in: the component carries its own
+  local state (calcMode/calcInput) and has zero dependency on sensor
+  data, BLE connection, or this product's pitch/roll specifics, so the
+  port is a straight logic copy -- confirmed by reading the standard
+  product's actual component before writing anything, not assumed.
+
+  The only real adaptation needed was style, not logic: the standard
+  product's version uses Tailwind className strings and a teal accent;
+  this file uses inline style objects throughout and DLT4P's own
+  established amber accent (#fbbf24) everywhere else in the app.
+  Converted to match, not copied verbatim -- teal would have been a
+  visually inconsistent one-off in an otherwise fully amber-themed app.
+
+  Verified, not just visually inspected: rendered headless and tested
+  both calculation modes against exact known values before considering
+  this done -- 45 degrees converts to exactly 120.000" rise and 100.000%
+  grade (tan(45 deg) = 1 exactly), and 12 in/ft converts back to exactly
+  45.0000 degrees (atan(12/12) = 45 deg exactly). No page errors in
+  either direction.
+
+  Placed in the main render directly after Calibration and before the
+  footer, matching where it sits in the standard product's own layout
+  and guide ordering. Independent of connection state, same as there --
+  no isConnected gating needed.
+-->
+<!--
+  Digital Level Tradesman 4 Point -- Web App
+  Version: 1.0-lockdown-history (superseded by v1.10 above)
+
+  Locking down v1.7 as Proto 1.0. Two version-visibility fixes applied
+  in this pass, both genuinely overdue -- the equivalent fix had already
+  been made on Digital Level Tradesman (standard) but was never carried
+  over here, despite being asked for more than once:
+    - Added a version subtitle under the header title (previously
+      absent entirely) -- 12px, color #94a3b8, chosen for contrast
+      against the dark header background, not just matched to the
+      existing (harder-to-read) footer style.
+    - Increased the footer version text from 11px/#1e3a5f (a dark navy,
+      low-contrast against the dark background) to 13px/#64748b, a
+      lighter, more visible gray -- addressing the actual readability
+      complaint, not just adding a second, equally-hard-to-read copy.
+
+  No functional changes in this pass -- this is the same v1.7 that fixed
+  the Calibration bug (TAR:-based correction, per a separate AI's
+  structural finding), now formally locked as the shipping baseline for
+  this product.
+
+  New in v1.7 (changes from v1.6): fixes v1.5 AND v1.6's calibration bug
+  correctly and completely, replacing v1.6's approach rather than
+  patching it further.
+
+  v1.6's fix (app-side offset tracking) turned out to only work starting
+  from a session's SECOND calibration -- confirmed by tracing the actual
+  shipped v1.6 code against the exact reported test sequence (power on,
+  connect, Tare, Calibrate): the tracking refs are still null at that
+  point, so the first calibration used the identical formula as v1.5,
+  producing "no visible change at all" exactly as reported. This was a
+  real, acknowledged gap in v1.6's scope, not a new or different bug.
+
+  Root structural issue, found by a separate AI (ChatGPT) reviewing a
+  handoff document of this problem: both v1.5 and v1.6 sent the
+  calibration result via CAL:, which REPLACES the firmware's stored
+  offset absolutely -- but the 2-position average was never a complete
+  replacement value, only a CORRECTION relative to whatever offset was
+  already stored (confirmed algebraically: the average equals B-O or
+  O-B, where B is the true hardware bias and O is the pre-existing
+  offset -- never B alone). CAL: was structurally the wrong command for
+  what this value represents.
+
+  Fix: send the exact same correction values via TAR: (additive) instead
+  of CAL:. The firmware then adds the correction to WHATEVER it
+  currently has: pitchOffset_new = O + (B-O) = B; rollOffset_new =
+  O + (O-B negated) = B -- isolating the pure hardware bias exactly,
+  with zero dependency on the app knowing O. Verified numerically with
+  two different, deliberately untracked O values before implementing;
+  both converged to the identical, correct bias either way -- confirming
+  this works regardless of an earlier Tare, a persisted offset from a
+  prior session, or whether this is the first calibration in a session.
+
+  This eliminates the entire knownPitchOffsetRef/knownRollOffsetRef
+  tracking mechanism v1.6 added -- removed entirely, along with its
+  usages in Tare, Reset, and disconnect handling. Net simpler than v1.6,
+  not just more correct.
+
+  New in v1.5 (changes from v1.4): added a 2-position in-app Calibration
+  feature. Previously absent from this product entirely -- only Tare
+  existed in the app; Calibration was standalone-button-only. This gap
+  was flagged, then deferred, when the original Pro 4 Point + Tradesman
+  4 Point Operator's Guide was built (that guide's Calibration section
+  described a feature that didn't actually exist in either app). Ported
+  from Digital Level Tradesman (standard), which already has this
+  feature working correctly.
+
+  Sampling reads directly from epRef.current/erRef.current (the same
+  smoothed accumulator that feeds the display), rather than adding a
+  separate pitch/roll-tracking ref pair -- one less piece of state to
+  keep in sync with the existing Tare/EMA machinery.
+
+  CRITICAL, applied deliberately: this product negates roll on receipt
+  for display (rr=-parseFloat(m[2])), same as it always has. The
+  calibration set command negates the sampled roll average back
+  (-or_.toFixed(2)) before sending, exactly matching the fix already
+  applied to this product's Tare in v1.4 -- sending the already-negated
+  display value directly would reproduce the exact bug found and fixed
+  there: the error doesn't correct, it doubles with each use. Pitch
+  needs no such correction; it was never negated.
+
+  Confirmed by diff against v1.4: every changed line is an addition --
+  nothing existing was removed or modified. This is a purely additive
+  feature, isolated from Tare, the bull's-eye display, demo modes, and
+  BLE connect/disconnect handling.
+
+  Pro 4 Point intentionally NOT touched in this pass -- set aside for a
+  future update, per explicit instruction, to keep this change scoped
+  and shippable today.
+
+  New in v1.4 (changes from v1.3): bubble response speed. Built clean on
+  top of v1.3's corrected baseline (branding removal preserved, confirmed
+  below), rather than carried forward from the killed v1.3 build.
+
+    - Re-added adaptive two-rate EMA smoothing (EMA_ALPHA_FAST = 0.30,
+      ADAPT_THRESHOLD_DEG = 0.15): reacts fast while a reading is still
+      catching up to a real change, drops back to the original slow,
+      stable EMA_ALPHA (0.05) once close to settled. Applied
+      independently per axis. Does not change steady-state accuracy --
+      only how long it takes to get there.
+    - Confirmed isolated from Tare, connect-time startup averaging, and
+      all three demo modes before implementing, same verification as the
+      killed build -- none of those touch this smoothing-rate logic.
+    - Confirmed "MPU-6050 · ESP32 · BLE" branding remains removed from
+      both the header and footer (v1.3's fix) -- this version only adds
+      the smoothing change, nothing else.
+
+  NOTE: an earlier v1.3 (adaptive-smoothing bubble-response fix) was
+  killed before shipping, because it was built on top of v1.2 without
+  first catching this bug -- fixing v1.2's gap took priority. This v1.3
+  is a clean rebuild from v1.2 containing ONLY this fix. The adaptive-
+  smoothing work is set aside for a future version, to be redone on top
+  of this corrected baseline rather than carried forward as-is.
+
+  New in v1.3 (changes from v1.2): removed "MPU-6050 · ESP32 · BLE"
+  chip/sensor branding from both places it was still showing -- the
+  header subtitle under the product name, and a separate line in the
+  footer. This removal was already done for Digital Level Tradesman
+  (standard) back in v1.6 (header) and v1.8 (footer), but this product's
+  own removal (originally done in the old, discarded v1.1-v1.4 line) was
+  lost when that line was discarded and never re-applied during the clean
+  rebuild that followed. Caught and fixed now, on the declared threshold
+  standard, before shipping.
+
+  New in v1.2 (changes from v1.1):
+    - Added a crosshair through the bubble's own center, reaching its own
+      outer edge (r:18) with no gap. Previously the bubble's crosshair
+      stopped short of its own edge, leaving a small gap that made it
+      harder to precisely match against the fixed background crosshair /
+      center target. Now it's a precise line-to-line match, same fix as
+      Digital Level Tradesman (standard) v1.9's bubble center line, in
+      the 2D bull's-eye equivalent (horizontal + vertical instead of just
+      vertical).
+
+  New in v1.1 (changes from v1.0): two confirmed bugs fixed in the Tare
+  function.
+
+    1. EMA smoothing accumulator (epRef.current/erRef.current) was never
+       reset when Tare was tapped -- only the displayed value was. The
+       accumulator kept holding its stale pre-tare value, so the display
+       would drift back off-center over the following packets instead of
+       staying at 0. Fixed: the accumulator is now reset to 0 alongside
+       the displayed state.
+
+    2. Roll is negated on receipt for display purposes
+       (rr=-parseFloat(m[2]) -- "hardware X axis is inverted relative to
+       display convention"), but that already-negated value was being
+       sent straight into the TAR: command, which the firmware interprets
+       in its own, non-negated convention. Worked out precisely: this
+       computed a new offset of (2*rollOffset - roll) instead of the
+       correct (roll) -- meaning the error did not shrink on tare, it
+       DOUBLED with each tap. This was the root cause of the original,
+       very first symptom ever reported for this product: "moving the
+       bubble left each time Tare is tapped." Fixed: roll is negated back
+       (undoing the display-side negation) specifically when constructing
+       the TAR: command, so the firmware receives its own convention.
+
+  Both fixes are confirmed working as of this version. Getting here took
+  seven iterative attempts (a redesigned clear/observe/set tare sequence
+  that was ultimately abandoned, several timing experiments, a reverted
+  approach, and finally this sign-convention fix) -- full blow-by-blow
+  history of that process, including dead ends and why each one was
+  abandoned, is preserved in a separate document:
+  DL_Tradesman4Point_Tare_Bug_Handoff.md. Not duplicated here to keep this
+  changelog focused on what's actually true about the shipped code.
+
+  KNOWN, NOT YET DONE: the same two bugs are confirmed present in Digital
+  Level Pro 4 Point (identical unguarded roll negation and identical
+  missing accumulator reset). Digital Level Tradesman (standard) and
+  Digital Level Pro (standard) are confirmed to need only the accumulator
+  fix (neither negates roll, so the sign bug does not apply to them).
+  None of the three have been fixed yet as of this version.
+
+  ============================================================
+  ORIGINAL v1.0 DESIGN NOTES:
+  ============================================================
+
+  First release. Digital Level Pro 4 Point's bull's-eye + 4-point advisory
+  UI and leveling-screw workflow, running on MPU-6050 instead of the
+  ADXL355 Pro 4 Point uses -- a "for now" stopgap, same story as Digital
+  Level Pro's own MPU-6050 phase before ADXL355 became available again.
+  Family position:
+
+                    Standard UI      4-Point UI
+    MPU-6050        Tradesman        Tradesman 4 Point (this)
+    ADXL355         Pro              Pro 4 Point
+
+  Code lineage: forked from Digital Level Pro 4 Point v1.0 essentially
+  unchanged -- ADXL355 branding swapped to MPU-6050, product name updated
+  throughout. Talks to the SAME MPU-6050 firmware already used by Digital
+  Level Tradesman and Digital Level RV (DigitalLevel_Firmware_v2.5.ino) --
+  BLE UUIDs and device name ("Level") unchanged, so no new firmware was
+  needed, same as how Tradesman itself is a straight rebrand of Pro's app
+  rather than a redesign.
+
+  Precision constants (EMA_ALPHA, the +/-0.01/0.05/0.10 deg threshold
+  options, MAX_DEG) were kept IDENTICAL to Pro 4 Point rather than retuned
+  for MPU-6050's noisier sensor -- deliberate choice, matching how
+  Tradesman-standard already carries this same tension unaddressed today,
+  and not worth inventing unverified "better" numbers for a temporary
+  product with no real hardware data behind them yet.
+
+  KNOWN LIMITATION, stated plainly rather than left to be discovered: the
+  +/-0.01 deg threshold option is unlikely to hold steady on MPU-6050 --
+  its noise floor is high enough relative to that threshold that the LEVEL
+  label will likely flicker in and out rather than settle, regardless of
+  display smoothing. This is a real sensor limitation, not a bug. Worth
+  field-testing alongside Tradesman itself before deciding whether the
+  option should be removed, relabeled, or left as-is for this tier.
+
+  Everything else (purely-relative advisory, no real geometry, Bubble Demo,
+  Screw Demo, service worker fix) is unchanged from Pro 4 Point.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+<meta name="theme-color" content="#0a0f1e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Digital Level Tradesman 4 Point">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Digital Level Tradesman 4 Point</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:#0d1117;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#f1f5f9}
+@keyframes bounceUp{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+@keyframes toastIn{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes spinAnim{to{transform:rotate(360deg)}}
+.bounce{animation:bounceUp 0.9s ease-in-out infinite}
+.spin{animation:spinAnim 1s linear infinite}
+.toast-in{animation:toastIn 0.3s ease-out forwards}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:24px;background:transparent;cursor:pointer;margin:0}
+input[type=range]::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:#1e293b}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;border-radius:50%;background:#fbbf24;margin-top:-8px;border:2px solid #0d1117}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const {useState,useEffect,useRef,useCallback,useMemo}=React;
+const h=React.createElement;
+
+// ── Constants ────────────────────────────────────────────────────────────────
+const SERVICE_UUID='6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const TX_UUID     ='6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+const RX_UUID     ='6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+const EMA_ALPHA   = 0.05;  // matches Digital Level Pro's smoothing -- precision tier, not RV's fast-response 0.15
+// v1.4: adaptive two-rate smoothing. A single fixed alpha can't give both
+// fast response AND low jitter -- those are the same dial, not two
+// independent things. Instead: react fast while the reading is still
+// catching up to a real change (e.g. someone turning a leveling screw),
+// then drop back to the slow, stable EMA_ALPHA once it's actually close
+// to settled. Does NOT change steady-state accuracy -- a settled EMA
+// converges to the same mean regardless of alpha, only how long it takes
+// to get there. Applied independently per axis, since a real adjustment
+// often only changes one (e.g. turning one screw mostly affects pitch).
+const EMA_ALPHA_FAST      = 0.30;
+const ADAPT_THRESHOLD_DEG = 0.15; // above this delta, use the fast alpha; at/below it, use the slow one
+const THRESHOLD_OPTIONS = [0.01,0.05,0.10]; // matches Digital Level Pro's three options exactly
+const MAX_DEG     = 5;      // matches Digital Level Pro's bubble-tube scale, for visual consistency across the family
+// PLACEHOLDER -- purely-relative demo scale factors (not real machine geometry; per design decision,
+// the live advisory intentionally does NOT use real distances -- see header comment). These only
+// affect how far the Screw Demo sliders (in turns) sweep the simulated pitch/roll for demoing the
+// display without hardware. Best-guess numbers pending real millwright feedback.
+const TURN_SCALE_LONG = 60;
+const TURN_SCALE_LAT  = 48;
+const DEFAULT_SCREWS = {LF:0,RF:0,LR:0,RR:0};
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function clamp(v,a,b){return Math.min(Math.max(v,a),b)}
+function sign(v){return v>0?'+':''}
+function tiltColor(v,thr){
+  const a=Math.abs(v);
+  if(a<=thr)return'#34d399';
+  if(a<=thr*2)return'#facc15';
+  return'#f87171';
+}
+
+// ── Screw slider math ─────────────────────────────────────────────────────────
+// pitch: front high = positive, back high = negative
+// roll:  right high = positive, left high = negative
+function screwsToPitchRoll(j){
+  const fa=(j.LF+j.RF)/2, ra=(j.LR+j.RR)/2;
+  const la=(j.LF+j.LR)/2, ria=(j.RF+j.RR)/2;
+  return{
+    pitch: Math.atan((fa-ra)/TURN_SCALE_LONG)*(180/Math.PI),
+    roll:  Math.atan((ria-la)/TURN_SCALE_LAT)*(180/Math.PI),
+  };
+}
+function randomScrews(){
+  return{LF:+(Math.random()*4).toFixed(1),RF:+(Math.random()*4).toFixed(1),
+         LR:+(Math.random()*4).toFixed(1),RR:+(Math.random()*4).toFixed(1)};
+}
+
+// ── Corner height ─────────────────────────────────────────────────────────────
+// Derived directly from the motion spec:
+//   Right high (positive roll)  → left screws low → FL and RL lowest
+//   Left high  (negative roll)  → right screws low → FR and RR lowest
+//   Front high (positive pitch) → rear screws low  → RL and RR lowest
+//   Back high  (negative pitch) → front screws low → FL and FR lowest
+//
+// Corner relative height = its contribution from pitch + its contribution from roll
+//   FL: front(+pitch) left(-roll)  = +pitch - roll... wait, left is HIGH when roll negative
+//       roll positive = right high = left low, so FL gets -roll contribution
+//       FL = +pitch - roll  ✓ (pitch positive=front high→FL high; roll positive=right high→FL low)
+//   FR: front(+pitch) right(+roll) = +pitch + roll
+//   RL: rear(-pitch)  left(-roll)  = -pitch - roll
+//   RR: rear(-pitch)  right(+roll) = -pitch + roll
+//
+// Screw advisory: LOW corners need raising (show red +), HIGH corners are reference (gray/green)
+function cornerHeight(id,p,r){
+  if(id==='FL') return  p - r;
+  if(id==='FR') return  p + r;
+  if(id==='RL') return -p - r;
+  if(id==='RR') return -p + r;
+  return 0;
+}
+
+// ── Corner positions on the bull's-eye ───────────────────────────────────────
+// FRONT is at TOP of display, REAR at BOTTOM
+// LEFT is LEFT, RIGHT is RIGHT (operator seated facing front)
+const CORNERS=[
+  {id:'FL',label:'LF',x:'18%',y:'14%'},  // front-left  = top-left
+  {id:'FR',label:'RF',x:'74%',y:'14%'},  // front-right = top-right
+  {id:'RL',label:'LR',x:'18%',y:'76%'},  // rear-left   = bottom-left
+  {id:'RR',label:'RR',x:'74%',y:'76%'},  // rear-right  = bottom-right
+];
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function useToast(){
+  const[ts,setTs]=useState([]);
+  const show=useCallback((msg,type='info')=>{
+    const id=Date.now();
+    setTs(t=>[...t,{id,msg,type}]);
+    setTimeout(()=>setTs(t=>t.filter(x=>x.id!==id)),3000);
+  },[]);
+  return{ts,show};
+}
+
+// ── Screw advisory pin ─────────────────────────────────────────────────────────
+function ScrewPin({corner,height,maxH,minH,threshold}){
+  const deficit=maxH-height;
+  const isRef=deficit<0.05;
+  const range=maxH-minH;
+  const arrowScale=range>0.05?Math.min(deficit/range,1):0;
+  let bg,bdr,col;
+  if(isRef)              {bg='rgba(100,116,139,0.7)';bdr='rgba(148,163,184,0.5)';col='#94a3b8';}
+  else if(deficit<=threshold)    {bg='rgba(52,211,153,0.25)';bdr='rgba(52,211,153,0.8)'; col='#34d399';}
+  else if(deficit<=threshold*2)  {bg='rgba(250,204,21,0.25)'; bdr='rgba(250,204,21,0.8)'; col='#facc15';}
+  else                           {bg='rgba(248,113,113,0.25)';bdr='rgba(248,113,113,0.8)';col='#f87171';}
+  return h('div',{style:{position:'absolute',left:corner.x,top:corner.y,
+      transform:'translate(-50%,-50%)',zIndex:20,
+      display:'flex',flexDirection:'column',alignItems:'center',gap:'2px'}},
+    !isRef&&deficit>0.05&&h('div',{className:'bounce',
+      style:{color:col,fontSize:`${14+arrowScale*8}px`,lineHeight:1}},'\u25B2'),
+    h('div',{style:{background:bg,border:`1.5px solid ${bdr}`,backdropFilter:'blur(4px)',
+        borderRadius:'8px',padding:'4px 6px',
+        display:'flex',flexDirection:'column',alignItems:'center',minWidth:'42px'}},
+      h('svg',{width:20,height:14,viewBox:'0 0 20 14',fill:'none'},
+        h('rect',{x:0,y:11,width:20,height:3,rx:1,fill:col,opacity:0.8}),
+        h('rect',{x:0,y:0,width:20,height:3,rx:1,fill:col,opacity:0.8}),
+        h('line',{x1:4,y1:11,x2:10,y2:3,stroke:col,strokeWidth:1.5,opacity:0.9}),
+        h('line',{x1:16,y1:11,x2:10,y2:3,stroke:col,strokeWidth:1.5,opacity:0.9}),
+        h('line',{x1:4,y1:3,x2:10,y2:11,stroke:col,strokeWidth:1.5,opacity:0.6}),
+        h('line',{x1:16,y1:3,x2:10,y2:11,stroke:col,strokeWidth:1.5,opacity:0.6})
+      ),
+      h('span',{style:{fontSize:'11px',fontWeight:700,color:col,lineHeight:1,marginTop:'2px'}},
+        corner.label)
+    ),
+    !isRef&&deficit>0.05&&h('div',{style:{fontSize:'12px',fontFamily:'monospace',
+        fontWeight:700,color:col,textShadow:'0 1px 4px rgba(0,0,0,0.8)',lineHeight:1}},
+      `+${deficit.toFixed(2)}\u00B0`)
+  );
+}
+
+// ── Bull's-eye ────────────────────────────────────────────────────────────────
+// Bubble motion spec (derived from your definitive description):
+//   Right side high → bubble moves RIGHT → bubbleX positive when roll positive
+//   Left side high  → bubble moves LEFT  → bubbleX negative when roll negative
+//   Front high      → bubble moves FRONT (UP in display) → bubbleY negative when pitch positive
+//   Back high       → bubble moves BACK  (DOWN in display) → bubbleY positive when pitch negative
+//
+// Therefore:
+//   bubbleX =  roll  (positive roll = right high = bubble right)
+//   bubbleY = -pitch (positive pitch = front high = bubble UP = negative Y in SVG)
+function BullsEye({pitch,roll,threshold,isLevel,draggable,onDrag}){
+  const R=155;
+  const bx=clamp( roll/MAX_DEG,-1,1)*(R*0.72);
+  const by=clamp(-pitch/MAX_DEG,-1,1)*(R*0.72);
+  const lzR=(threshold/MAX_DEG)*(R*0.72);
+  const bCol=isLevel?'#34d399'
+    :Math.abs(pitch)<=threshold*2&&Math.abs(roll)<=threshold*2?'#facc15':'#f87171';
+  const heights=CORNERS.map(c=>({...c,h:cornerHeight(c.id,pitch,roll)}));
+  const maxH=Math.max(...heights.map(c=>c.h));
+  const minH=Math.min(...heights.map(c=>c.h));
+
+  // v3.5: drag-to-set. Exact inverse of the bx/by render formulas above --
+  // dragging to a point on the ring reproduces the same pitch/roll the
+  // real sensor would report from that tilt.
+  const containerRef=useRef(null);
+  const draggingRef=useRef(null);
+  const handlePointer=useCallback(e=>{
+    if(!draggable||!containerRef.current||!onDrag)return;
+    const rect=containerRef.current.getBoundingClientRect();
+    const scale=(R*2)/rect.width; // guards against any CSS scaling of the box
+    const px=((e.clientX-rect.left)*scale)-R;
+    const py=((e.clientY-rect.top)*scale)-R;
+    const rollVal =clamp( px/(R*0.72),-1,1)*MAX_DEG;
+    const pitchVal=clamp(-py/(R*0.72),-1,1)*MAX_DEG;
+    onDrag(+pitchVal.toFixed(2),+rollVal.toFixed(2));
+  },[draggable,onDrag]);
+  const onPointerDown=useCallback(e=>{
+    if(!draggable||draggingRef.current!==null||e.button!==0)return;
+    e.preventDefault();
+    draggingRef.current=e.pointerId;
+    try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){}
+    handlePointer(e);
+  },[draggable,handlePointer]);
+  const endDrag=useCallback(e=>{
+    if(draggingRef.current!==e.pointerId)return;
+    draggingRef.current=null;
+    try{if(e.currentTarget.hasPointerCapture(e.pointerId))e.currentTarget.releasePointerCapture(e.pointerId);}catch(_){}
+  },[]);
+  const onPointerMove=useCallback(e=>{
+    if(!draggable||draggingRef.current!==e.pointerId)return;
+    if(e.pointerType==='mouse'&&!(e.buttons&1)){endDrag(e);return;}
+    handlePointer(e);
+  },[draggable,handlePointer,endDrag]);
+
+  return h('div',{ref:containerRef,style:{position:'relative',width:R*2,height:R*2,borderRadius:'16px',
+      overflow:'hidden',cursor:draggable?'grab':'default',touchAction:draggable?'none':'auto',userSelect:draggable?'none':'auto',WebkitUserSelect:draggable?'none':'auto',
+      background:'radial-gradient(ellipse at center,#0e1929 0%,#050810 100%)',
+      boxShadow:draggable?'0 0 0 2px rgba(251,191,36,0.5),0 8px 40px rgba(0,0,0,0.7)':'0 0 0 1px rgba(30,58,95,0.6),0 8px 40px rgba(0,0,0,0.7)'},
+      onPointerDown,onPointerMove,onPointerUp:endDrag,onPointerCancel:endDrag,onLostPointerCapture:endDrag,onPointerLeave:e=>{if(!e.currentTarget.hasPointerCapture(e.pointerId))endDrag(e);}},
+    // Screw pins
+    ...heights.map(c=>h(ScrewPin,{key:c.id,corner:c,height:c.h,maxH,minH,threshold})),
+    // FRONT label
+    h('div',{style:{position:'absolute',top:'8px',left:'50%',
+        transform:'translateX(-50%)',zIndex:30}},
+      h('div',{style:{background:'rgba(251,191,36,0.9)',borderRadius:'6px',
+          padding:'3px 10px',border:'1px solid rgba(251,191,36,0.5)'}},
+        h('span',{style:{fontSize:'10px',fontWeight:900,color:'white',
+            letterSpacing:'0.12em'}},'\u25B2 FRONT'))),
+    // REAR
+    h('div',{style:{position:'absolute',bottom:'8px',left:'50%',
+        transform:'translateX(-50%)',zIndex:30}},
+      h('span',{style:{fontSize:'10px',fontWeight:700,
+          color:'rgba(255,255,255,0.3)',letterSpacing:'0.1em'}},'REAR \u25BC')),
+    // L / R
+    h('div',{style:{position:'absolute',left:'8px',top:'50%',
+        transform:'translateY(-50%)',zIndex:30}},
+      h('span',{style:{fontSize:'10px',fontWeight:700,
+          color:'rgba(255,255,255,0.3)',writingMode:'vertical-rl',
+          transform:'rotate(180deg)'}},'\u25C4 L')),
+    h('div',{style:{position:'absolute',right:'8px',top:'50%',
+        transform:'translateY(-50%)',zIndex:30}},
+      h('span',{style:{fontSize:'10px',fontWeight:700,
+          color:'rgba(255,255,255,0.3)',writingMode:'vertical-rl'}},'R \u25BA')),
+    // SVG rings + bubble
+    h('svg',{style:{position:'absolute',inset:0,width:'100%',height:'100%',pointerEvents:'none'},
+        viewBox:`${-R} ${-R} ${R*2} ${R*2}`,preserveAspectRatio:'xMidYMid meet'},
+      h('circle',{cx:0,cy:0,r:R*0.85,fill:'none',
+          stroke:'rgba(255,255,255,0.15)',strokeWidth:1.5}),
+      h('circle',{cx:0,cy:0,r:R*0.55,fill:'none',
+          stroke:'rgba(255,255,255,0.12)',strokeWidth:1}),
+      h('circle',{cx:0,cy:0,r:lzR,
+          fill:isLevel?'rgba(52,211,153,0.18)':'rgba(52,211,153,0.08)',
+          stroke:isLevel?'rgba(52,211,153,0.7)':'rgba(52,211,153,0.35)',
+          strokeWidth:1.5}),
+      h('line',{x1:-R*0.85,y1:0,x2:R*0.85,y2:0,
+          stroke:'rgba(255,255,255,0.15)',strokeWidth:1}),
+      h('line',{x1:0,y1:-R*0.85,x2:0,y2:R*0.85,
+          stroke:'rgba(255,255,255,0.15)',strokeWidth:1}),
+      // Fixed center target -- stationary aim point, independent of the
+      // bubble's position, so it's clear exactly where "centered" is.
+      // Drawn before the bubble group, so the bubble visually covers it
+      // once it's actually centered.
+      h('circle',{cx:0,cy:0,r:3,fill:'#ffffff',fillOpacity:0.9}),
+      h('g',{style:{transition:draggable?'none':'transform 0.05s ease-out'},
+          transform:`translate(${bx},${by})`},
+        h('circle',{cx:0,cy:0,r:20,fill:'rgba(0,0,0,0.35)'}),
+        h('circle',{cx:0,cy:0,r:18,fill:bCol,fillOpacity:0.7,
+            stroke:bCol,strokeWidth:2}),
+        // Crosshair through the bubble's own center, reaching its own
+        // outer edge (r:18) with no gap -- makes it a precise line-to-line
+        // match against the fixed background crosshair/center target,
+        // instead of eyeballing the center of a filled circle.
+        h('line',{x1:-18,y1:0,x2:18,y2:0,
+            stroke:'rgba(255,255,255,0.85)',strokeWidth:1}),
+        h('line',{x1:0,y1:-18,x2:0,y2:18,
+            stroke:'rgba(255,255,255,0.85)',strokeWidth:1})
+      )
+    )
+  );
+}
+
+// ── Tilt bar ──────────────────────────────────────────────────────────────────
+function TiltBar({label,value,threshold,leftLbl,rightLbl}){
+  const pct=clamp(value/MAX_DEG,-1,1);
+  const col=tiltColor(value,threshold);
+  const tW=(threshold/MAX_DEG)*50;
+  return h('div',{style:{flex:1}},
+    h('div',{style:{display:'flex',justifyContent:'space-between',
+        alignItems:'center',marginBottom:'6px'}},
+      h('span',{style:{fontSize:'12px',color:'#64748b'}},label),
+      h('span',{style:{fontSize:'14px',fontFamily:'monospace',
+          fontWeight:700,color:col}},`${sign(value)}${value.toFixed(2)}\u00B0`)
+    ),
+    h('div',{style:{position:'relative',height:'10px',borderRadius:'5px',
+        background:'#0f1929',border:'1px solid #1e293b',overflow:'hidden'}},
+      h('div',{style:{position:'absolute',top:0,bottom:0,
+          background:'rgba(52,211,153,0.15)',
+          borderLeft:'1px solid rgba(52,211,153,0.25)',
+          borderRight:'1px solid rgba(52,211,153,0.25)',
+          left:`${50-tW}%`,width:`${tW*2}%`}}),
+      h('div',{style:{position:'absolute',top:0,bottom:0,left:'50%',
+          width:'1px',background:'rgba(100,116,139,0.4)'}}),
+      h('div',{style:{position:'absolute',top:'1px',bottom:'1px',
+          width:'8px',borderRadius:'4px',background:col,
+          left:`calc(50% + ${pct*44}% - 4px)`,transition:'left 0.1s ease-out'}})
+    ),
+    h('div',{style:{display:'flex',justifyContent:'space-between',
+        fontSize:'10px',color:'#334155',marginTop:'3px'}},
+      h('span',null,leftLbl),h('span',null,rightLbl))
+  );
+}
+
+// ── Screw demo controls ────────────────────────────────────────────────────────
+const SCREW_LAYOUT=[
+  {key:'LF',label:'Left Front'},{key:'RF',label:'Right Front'},
+  {key:'LR',label:'Left Rear'}, {key:'RR',label:'Right Rear'},
+];
+function ScrewSlider({screwKey,label,value,onChange}){
+  return h('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',
+      gap:'4px',padding:'10px 8px',borderRadius:'10px',
+      background:'rgba(15,25,41,0.8)',border:'1px solid rgba(30,58,95,0.5)'}},
+    h('span',{style:{fontSize:'10px',fontWeight:700,color:'#64748b',
+        textTransform:'uppercase',letterSpacing:'0.08em'}},label),
+    h('span',{style:{fontSize:'16px',fontFamily:'monospace',fontWeight:700,
+        color:'#fbbf24'}},`${value.toFixed(2)} turns`),
+    h('input',{type:'range',min:0,max:4,step:0.05,defaultValue:value,
+        onInput:e=>onChange(screwKey,parseFloat(e.target.value)),
+        onChange:e=>onChange(screwKey,parseFloat(e.target.value))}),
+    h('div',{style:{display:'flex',justifyContent:'space-between',
+        width:'100%',fontSize:'10px',color:'#1e293b'}},
+      h('span',null,'0'),h('span',null,'4 turns'))
+  );
+}
+function ScrewDemoControls({screws,onChange,onReset,onRandom}){
+  return h('div',null,
+    h('div',{style:{display:'flex',justifyContent:'space-between',
+        alignItems:'center',marginBottom:'10px'}},
+      h('span',{style:{fontSize:'11px',fontWeight:700,color:'#fbbf24',
+          textTransform:'uppercase',letterSpacing:'0.1em'}},'Screw Demo Controls'),
+      h('div',{style:{display:'flex',gap:'6px'}},
+        h('button',{onClick:onRandom,style:{padding:'4px 10px',borderRadius:'6px',
+            border:'1px solid #334155',background:'transparent',
+            fontSize:'11px',color:'#94a3b8',cursor:'pointer'}},'Random'),
+        h('button',{onClick:onReset,style:{padding:'4px 10px',borderRadius:'6px',
+            border:'1px solid #334155',background:'transparent',
+            fontSize:'11px',color:'#94a3b8',cursor:'pointer'}},'Reset')
+      )
+    ),
+    h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}},
+      SCREW_LAYOUT.map(j=>h(ScrewSlider,{key:j.key,screwKey:j.key,label:j.label,
+          value:screws[j.key],onChange}))
+    ),
+    h('p',{style:{fontSize:'10px',color:'#1e3a5f',textAlign:'center',
+        margin:'8px 0 0'}},'Slide each leveling screw to simulate turns from reference (purely relative -- not a calibrated real-world scale yet)')
+  );
+}
+
+// ── Slope / Degree Calculator ────────────────────────────────────────────────
+// v2.0: ported from Digital Level Tradesman (standard), where this feature
+// already exists and works. Missing from DLT4P was an oversight in how the
+// 4-point UI was originally built, not a deliberate omission -- see this
+// product's Facilities Logistics evaluation notes. Genuinely UI-only: the
+// component carries its own local state (calcMode/calcInput) and has zero
+// dependency on sensor data, BLE connection, or this product's pitch/roll
+// specifics, so the port is a straight logic copy. The only real work is
+// style -- this file uses inline style objects throughout, not the Tailwind
+// className strings the standard product's version uses, and DLT4P's
+// established accent is amber (#fbbf24), not the standard product's teal --
+// converted here to match the rest of THIS app, not copied verbatim.
+const SLOPE_KEYS=['7','8','9','4','5','6','1','2','3','.','0','\u232B'];
+function SlopeCalculator(){
+  const[calcMode,setCalcMode]=useState('deg');
+  const[calcInput,setCalcInput]=useState('');
+
+  const handleKey=(k)=>{
+    if(k==='\u232B'){setCalcInput(v=>v.slice(0,-1));return;}
+    if(k==='.'){if(!calcInput.includes('.'))setCalcInput(v=>v+'.');return;}
+    setCalcInput(v=>v.length<8?v+k:v);
+  };
+
+  const result=useMemo(()=>{
+    const v=parseFloat(calcInput);
+    if(isNaN(v))return null;
+    if(calcMode==='deg'){
+      const riseIn=Math.tan(Math.abs(v)*Math.PI/180)*120;
+      return{riseIn,pct:Math.tan(Math.abs(v)*Math.PI/180)*100};
+    }else{
+      const riseIn=Math.abs(v)*10;
+      return{deg:Math.atan(Math.abs(v)/12)*180/Math.PI,riseIn,pct:(Math.abs(v)/12)*100};
+    }
+  },[calcInput,calcMode]);
+
+  return h('div',{style:{background:'rgba(13,17,23,0.7)',borderRadius:'16px',
+      border:'1px solid rgba(30,58,95,0.5)',overflow:'hidden'}},
+    h('div',{style:{padding:'12px 16px',borderBottom:'1px solid rgba(30,58,95,0.5)'}},
+      h('p',{style:{fontSize:'13px',fontWeight:600,color:'#cbd5e1',margin:0,
+          display:'flex',alignItems:'center',gap:'8px'}},
+        h('span',{style:{color:'#fbbf24'}},'\u21C4'),
+        'Slope / Degree Calculator')
+    ),
+    h('div',{style:{padding:'14px',display:'flex',flexDirection:'column',gap:'10px'}},
+      // Mode toggle
+      h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}},
+        [{id:'deg',label:'Degrees \u2192 Slope'},{id:'slope',label:'Slope \u2192 Degrees'}].map(opt=>
+          h('button',{key:opt.id,
+              onClick:()=>{setCalcMode(opt.id);setCalcInput('');},
+              style:{padding:'9px',borderRadius:'10px',
+                fontSize:'12px',fontWeight:600,cursor:'pointer',
+                border:`1px solid ${calcMode===opt.id?'rgba(251,191,36,0.4)':'#334155'}`,
+                background:calcMode===opt.id?'rgba(251,191,36,0.15)':'rgba(15,25,41,0.6)',
+                color:calcMode===opt.id?'#fbbf24':'#64748b'}},
+            opt.label))
+      ),
+      // Display
+      h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',
+          padding:'12px 14px',borderRadius:'12px',background:'rgba(15,25,41,0.8)',
+          border:'1px solid #334155'}},
+        h('span',{style:{fontSize:'22px',fontFamily:'monospace',fontWeight:700,
+            color:'white',letterSpacing:'0.03em',flex:1,minWidth:0}},
+          calcInput||h('span',{style:{color:'#475569'}},'0.00')),
+        h('span',{style:{fontSize:'11px',color:'#64748b',marginLeft:'10px',flexShrink:0}},
+          calcMode==='deg'?'deg':'in/ft')
+      ),
+      // Keypad
+      h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'6px'}},
+        SLOPE_KEYS.map(k=>h('button',{key:k,onClick:()=>handleKey(k),
+            style:{padding:'14px 0',borderRadius:'10px',fontSize:'18px',fontWeight:600,
+              cursor:'pointer',
+              border:`1px solid ${k==='\u232B'?'#475569':'#334155'}`,
+              background:k==='\u232B'?'rgba(51,65,85,0.6)':'rgba(15,25,41,0.6)',
+              color:k==='\u232B'?'#f87171':k==='.'?'#fbbf24':'white'}},
+          k))
+      ),
+      // Results
+      result&&h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}},
+        calcMode==='deg'?[
+          h('div',{key:'rise',style:{padding:'10px',borderRadius:'8px',
+              background:'rgba(15,25,41,0.6)',textAlign:'center'}},
+            h('p',{style:{fontSize:'10px',color:'#64748b',margin:'0 0 4px'}},'Rise over 10 ft'),
+            h('p',{style:{fontSize:'13px',fontFamily:'monospace',fontWeight:700,color:'#fbbf24',margin:0}},
+              `${result.riseIn.toFixed(3)}"`)),
+          h('div',{key:'grade',style:{padding:'10px',borderRadius:'8px',
+              background:'rgba(15,25,41,0.6)',textAlign:'center'}},
+            h('p',{style:{fontSize:'10px',color:'#64748b',margin:'0 0 4px'}},'Grade'),
+            h('p',{style:{fontSize:'13px',fontFamily:'monospace',fontWeight:700,color:'#fbbf24',margin:0}},
+              `${result.pct.toFixed(3)}%`))
+        ]:[
+          h('div',{key:'angle',style:{padding:'10px',borderRadius:'8px',
+              background:'rgba(15,25,41,0.6)',textAlign:'center'}},
+            h('p',{style:{fontSize:'10px',color:'#64748b',margin:'0 0 4px'}},'Angle'),
+            h('p',{style:{fontSize:'13px',fontFamily:'monospace',fontWeight:700,color:'#fbbf24',margin:0}},
+              `${result.deg.toFixed(4)}\u00B0`)),
+          h('div',{key:'rise',style:{padding:'10px',borderRadius:'8px',
+              background:'rgba(15,25,41,0.6)',textAlign:'center'}},
+            h('p',{style:{fontSize:'10px',color:'#64748b',margin:'0 0 4px'}},'Rise over 10 ft'),
+            h('p',{style:{fontSize:'13px',fontFamily:'monospace',fontWeight:700,color:'#fbbf24',margin:0}},
+              `${result.riseIn.toFixed(3)}"`))
+        ]
+      )
+    )
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+function App(){
+  const{ts,show:toast}=useToast();
+
+  const[isConnecting,setIsConnecting]=useState(false);
+  const[isConnected,setIsConnected]=useState(false);
+  const[deviceName,setDeviceName]=useState('');
+  const txRef=useRef(null),devRef=useRef(null);
+  const epRef=useRef(null),erRef=useRef(null);
+  const startupBufRef=useRef([]);
+  const STARTUP_SAMPLES=3; // samples averaged before trusting the reading after connect -- avoids displaying a single potentially-transient first packet raw and unfiltered
+
+  // Tare sends a single TAR: command (see the Tare button's onClick for
+  // the full reasoning) -- just an in-progress flag here, to guard
+  // against double-tapping Tare while a write is in flight.
+  const tareStateRef=useRef('idle'); // 'idle' | 'taring'
+
+  const[pitch,setPitch]=useState(0);
+  const[roll,setRoll]=useState(0);
+
+  // v1.5: 2-position Calibration, ported from Digital Level Tradesman
+  // (standard), which already has this feature working. Not previously
+  // present in this product at all -- Tare was the only in-app offset
+  // tool; Calibration was standalone-button-only. Set Pro 4 Point aside
+  // for a future update; this port is scoped to Tradesman 4 Point only.
+  const[showCal,setShowCal]=useState(false);
+  const[calPhase,setCalPhase]=useState(0);
+  const[countdown,setCountdown]=useState(3);
+  const[calOffsets,setCalOffsets]=useState(null);
+  const pos1Ref=useRef(null);
+  const calSamplesRef=useRef([]);
+
+  // v1.6 previously added knownPitchOffsetRef/knownRollOffsetRef here, an
+  // app-side tracking approach that only worked from a session's SECOND
+  // calibration onward. v1.7 replaces it with a simpler, more complete
+  // fix that needs no tracking at all -- see startPosition2 below for
+  // the full reasoning. Removed.
+
+  const[demoMode,setDemoMode]=useState(false);
+  const[screws,setScrews]=useState(DEFAULT_SCREWS);
+  const[simActive,setSim]=useState(false);
+  const[simP,setSimP]=useState(0);
+  const simRef=useRef(null);
+
+  // v3.5: Bubble Demo -- drag the bull's-eye directly to set pitch+roll
+  const[bubbleDemo,setBubbleDemo]=useState(false);
+  const[bubbleP,setBubbleP]=useState(0);
+  const[bubbleR,setBubbleR]=useState(0);
+
+  const jTilt=screwsToPitchRoll(screws);
+  const[levelThreshold,setLevelThreshold]=useState(0.05); // matches Digital Level Pro's default
+
+  // Display values
+  const dPitch=demoMode?jTilt.pitch:simActive?simP:bubbleDemo?bubbleP:pitch;
+  const dRoll =demoMode?jTilt.roll :simActive?0   :bubbleDemo?bubbleR:roll;
+  const isLevel=Math.abs(dPitch)<=levelThreshold&&Math.abs(dRoll)<=levelThreshold;
+
+  // Auto-sweep
+  const toggleSim=useCallback(()=>{
+    if(simActive){clearInterval(simRef.current);setSim(false);setSimP(0);}
+    else{setDemoMode(false);setBubbleDemo(false);setSim(true);
+      const t0=Date.now();
+      simRef.current=setInterval(()=>{
+        const t=(Date.now()-t0)/1000;
+        setSimP(+(Math.sin(t*0.6)*2.5).toFixed(2));
+      },40);}
+  },[simActive]);
+  useEffect(()=>()=>clearInterval(simRef.current),[]);
+
+  // v3.5: Bubble Demo toggle -- mutually exclusive with the other two, same
+  // pattern they already use with each other.
+  const toggleBubbleDemo=useCallback(()=>{
+    setBubbleDemo(bd=>{
+      const next=!bd;
+      if(next){
+        setSim(false);clearInterval(simRef.current);setSimP(0);
+        setDemoMode(false);
+        setBubbleP(0);setBubbleR(0);
+      }
+      return next;
+    });
+  },[]);
+
+  const send=useCallback(async cmd=>{
+    if(!txRef.current)return false;
+    try{
+      await txRef.current.writeValue(new TextEncoder().encode(cmd+'\n'));
+      return true;
+    }catch(err){
+      // Surfaces write failures (dropped write, GATT busy, characteristic
+      // not ready) instead of silently swallowing them, and reports
+      // success/failure to the caller so sequences that depend on a write
+      // actually landing (like Tare) can react instead of assuming it
+      // worked.
+      toast(`Command failed: ${cmd.split(':')[0]} (${err.message||err})`,'error');
+      return false;
+    }
+  },[toast]);
+
+  // BLE data — NOTE: if live hardware roll is inverted vs spec,
+  // change parseFloat(m[2]) to -parseFloat(m[2]) here and nowhere else.
+  const onData=useCallback(e=>{
+    const v=new TextDecoder().decode(e.target.value).trim();
+    const m=v.match(/P:([-\d.]+),R:([-\d.]+)/);
+    if(!m)return;
+    const rp=parseFloat(m[1]);
+    const rr=-parseFloat(m[2]); // hardware X axis is inverted relative to display convention
+
+    if(epRef.current===null){
+      // v1.2: the very first packet after connecting was being displayed
+      // completely raw and unsmoothed -- if that first sample happens to be
+      // a transient/bad value (reported: bubble slams to max-left on
+      // connect even with the unit level and flat), it went straight to
+      // the screen with no filtering at all. Buffer a few samples first and
+      // seed the display with their average instead of trusting any single
+      // one of them. This is a defensive fix, not a confirmed fix -- I
+      // can't verify from here whether the underlying cause is a firmware-
+      // side startup transient or something else; this protects against
+      // displaying it either way.
+      startupBufRef.current.push([rp,rr]);
+      if(startupBufRef.current.length<STARTUP_SAMPLES)return;
+      const n=startupBufRef.current.length;
+      epRef.current=startupBufRef.current.reduce((s,x)=>s+x[0],0)/n;
+      erRef.current=startupBufRef.current.reduce((s,x)=>s+x[1],0)/n;
+      startupBufRef.current=[];
+    }
+    else{
+      const alphaP = Math.abs(rp-epRef.current) > ADAPT_THRESHOLD_DEG ? EMA_ALPHA_FAST : EMA_ALPHA;
+      const alphaR = Math.abs(rr-erRef.current) > ADAPT_THRESHOLD_DEG ? EMA_ALPHA_FAST : EMA_ALPHA;
+      epRef.current=alphaP*rp+(1-alphaP)*epRef.current;
+      erRef.current=alphaR*rr+(1-alphaR)*erRef.current;
+    }
+    setPitch(+(epRef.current).toFixed(2));
+    setRoll( +(erRef.current).toFixed(2));
+  },[send,toast]);
+
+  // v1.5: Calibration logic, ported from Tradesman standard. Samples
+  // directly from epRef.current/erRef.current (the same smoothed
+  // accumulator that feeds the display) rather than adding a separate
+  // pitch/roll-tracking ref pair -- one less piece of state to keep in
+  // sync.
+  const collectSamples=(n,ms)=>new Promise(resolve=>{
+    calSamplesRef.current=[];
+    let count=0;
+    const id=setInterval(()=>{
+      calSamplesRef.current.push({pitch:epRef.current,roll:erRef.current});
+      if(++count>=n){
+        clearInterval(id);
+        const avg=(arr,k)=>arr.reduce((s,r)=>s+r[k],0)/arr.length;
+        resolve({pitch:avg(calSamplesRef.current,'pitch'),roll:avg(calSamplesRef.current,'roll')});
+      }
+    },ms);
+  });
+
+  const runCountdown=(secs)=>new Promise(resolve=>{
+    let cd=secs;setCountdown(cd);
+    const id=setInterval(()=>{cd--;setCountdown(cd);if(cd<=0){clearInterval(id);resolve();}},1000);
+  });
+
+  const startCalibration=async()=>{
+    setCalPhase(1);await runCountdown(3);
+    setCalPhase(2);
+    pos1Ref.current=await collectSamples(60,100);
+    setCalPhase(3);
+  };
+
+  const startPosition2=async()=>{
+    setCalPhase(4);await runCountdown(3);
+    setCalPhase(5);
+    const p2=await collectSamples(60,100);
+    const p1=pos1Ref.current;
+    const op=(p1.pitch+p2.pitch)/2;
+    const or_=(p1.roll+p2.roll)/2;
+    setCalOffsets({pitch:op,roll:or_});
+    setCalPhase(6);
+    // v1.7: fixes v1.5 AND v1.6 both. The 2-position average (op/or_) is
+    // a CORRECTION relative to whatever offset O is already stored on
+    // the firmware -- confirmed algebraically: op = B-O (pitch),
+    // or_ = O-B (roll), where B is the true hardware bias and O is
+    // whatever offset was in effect during sampling. Both v1.5 and v1.6
+    // sent this via CAL:, which REPLACES the stored offset absolutely --
+    // wrong, since op/or_ was never a complete replacement value, only a
+    // correction. v1.6 tried to compensate by tracking O app-side, but
+    // that only worked once a KNOWN baseline had already been
+    // established by an earlier CAL:, leaving the very first calibration
+    // in a session unfixed -- confirmed against the actual shipped code
+    // to explain a reported "no visible change" result exactly.
+    //   Correct fix: send the SAME correction values via TAR: (additive)
+    // instead of CAL: (absolute set). The firmware then adds the
+    // correction to WHATEVER it currently has -- pitchOffset_new =
+    // O + (B-O) = B; rollOffset_new = O + (O-B... negated to B-O) = B --
+    // isolating the pure hardware bias exactly, with ZERO dependency on
+    // the app knowing O at all. Verified numerically with two different,
+    // deliberately untracked O values before implementing; both
+    // converged to the exact same, correct bias either way. This
+    // eliminates the need for knownPitchOffsetRef/knownRollOffsetRef
+    // entirely -- removed below.
+    send(`TAR:${op.toFixed(2)},${(-or_).toFixed(2)}`);
+  };
+
+  const resetCalibration=()=>{
+    setCalOffsets(null);setCalPhase(0);
+    send('CAL:0.00,0.00');toast('Calibration reset');
+  };
+
+  const onDisc=useCallback(()=>{
+    setIsConnected(false);txRef.current=null;
+    epRef.current=null;erRef.current=null;startupBufRef.current=[];
+    // Guard against disconnecting mid-tare -- don't leave a stale
+    // 'taring' state carried into a future reconnect.
+    tareStateRef.current='idle';
+    toast('Disconnected');
+  },[toast]);
+
+  const connect=useCallback(async()=>{
+    if(!navigator.bluetooth){toast('Use Chrome on Android or desktop','error');return;}
+    setIsConnecting(true);
+    try{
+      const d=await navigator.bluetooth.requestDevice({
+        filters:[{services:[SERVICE_UUID]}],optionalServices:[SERVICE_UUID]});
+      d.addEventListener('gattserverdisconnected',onDisc);devRef.current=d;
+      let s;
+      for(let i=1;i<=3;i++){
+        try{s=await d.gatt.connect();break;}
+        catch(e){if(i===3)throw e;await new Promise(r=>setTimeout(r,1000));}
+      }
+      const svc=await s.getPrimaryService(SERVICE_UUID);
+      txRef.current=await svc.getCharacteristic(TX_UUID);
+      try{
+        const rx=await svc.getCharacteristic(RX_UUID);
+        await rx.startNotifications();
+        rx.addEventListener('characteristicvaluechanged',onData);
+      }catch(_){}
+      setDeviceName(d.name||'Level');
+      setIsConnected(true);setDemoMode(false);setSim(false);setBubbleDemo(false);
+      clearInterval(simRef.current);
+      toast(`Connected to ${d.name||'Level'}`,'success');
+    }catch(e){if(e.name!=='NotFoundError')toast('Connection failed: '+e.message,'error');}
+    setIsConnecting(false);
+  },[onData,onDisc,toast]);
+
+  const disconnect=useCallback(()=>{
+    if(devRef.current?.gatt?.connected)devRef.current.gatt.disconnect();
+    setIsConnected(false);txRef.current=null;
+  },[]);
+
+  const sc=isConnected?'#34d399':(simActive||demoMode)?'#c084fc':'#475569';
+  const sl=isConnected?deviceName:simActive?'Auto demo':demoMode?'Screw demo':'Not connected';
+
+  return h(React.Fragment,null,
+    h('div',{style:{minHeight:'100vh',
+        background:'linear-gradient(135deg,#020617,#0f172a,#020617)',
+        paddingBottom:'2rem'}},
+
+      // Header
+      h('header',{style:{position:'sticky',top:0,zIndex:50,
+          background:'rgba(2,6,23,0.9)',backdropFilter:'blur(12px)',
+          borderBottom:'1px solid rgba(30,58,95,0.4)'}},
+        h('div',{style:{maxWidth:'420px',margin:'0 auto',padding:'12px 16px',
+            display:'flex',alignItems:'center',justifyContent:'space-between'}},
+          h('div',null,
+            h('h1',{style:{fontSize:'22px',fontWeight:300,color:'white',margin:0,lineHeight:1}},
+              'Digital Level Tradesman ',h('span',{style:{fontWeight:700,color:'#fbbf24'}},'4 Point')),
+            h('p',{style:{fontSize:'12px',color:'#94a3b8',margin:'3px 0 0',fontWeight:600}},'v1.11')
+          ),
+          h('div',{style:{display:'flex',alignItems:'center',gap:'5px',padding:'4px 10px',
+              borderRadius:'20px',border:`1px solid ${sc}40`,background:`${sc}12`,
+              fontSize:'11px',fontWeight:500,color:sc}},
+            h('span',{style:{width:'6px',height:'6px',borderRadius:'50%',
+                background:sc,display:'inline-block'}}),sl)
+        )
+      ),
+
+      h('main',{style:{maxWidth:'420px',margin:'0 auto',padding:'16px',
+          display:'flex',flexDirection:'column',gap:'12px'}},
+
+        // BLE card
+        h('div',{style:{background:'rgba(13,17,23,0.7)',borderRadius:'16px',
+            border:'1px solid rgba(30,58,95,0.5)',padding:'14px'}},
+          h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between'}},
+            h('div',{style:{display:'flex',alignItems:'center',gap:'10px'}},
+              h('div',{style:{width:'36px',height:'36px',borderRadius:'50%',
+                  display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',
+                  background:isConnected?'rgba(52,211,153,0.2)':'rgba(30,41,59,0.5)'}},
+                isConnected?'\uD83D\uDCF6':'\uD83D\uDCF5'),
+              h('div',null,
+                h('p',{style:{fontSize:'13px',fontWeight:600,color:'white',margin:0}},
+                  isConnected?deviceName:'Not Connected'),
+                h('p',{style:{fontSize:'11px',color:'#475569',margin:0}},
+                  isConnected?'BLE connected \u00B7 streaming':'Tap Connect to pair'))
+            ),
+            h('div',{style:{display:'flex',alignItems:'center',gap:'6px'}},
+              // Auto-sweep
+              h('button',{onClick:toggleSim,disabled:isConnected,
+                  style:{width:'30px',height:'30px',borderRadius:'8px',
+                    display:'flex',alignItems:'center',justifyContent:'center',
+                    border:`1px solid ${simActive?'rgba(192,132,252,0.5)':'#1e293b'}`,
+                    background:simActive?'rgba(192,132,252,0.2)':'rgba(15,25,41,0.6)',
+                    color:simActive?'#c084fc':'#475569',
+                    cursor:isConnected?'not-allowed':'pointer',
+                    opacity:isConnected?0.3:1}},
+                simActive
+                  ?h('svg',{width:12,height:12,viewBox:'0 0 24 24',fill:'none',
+                      stroke:'currentColor',strokeWidth:2},h('rect',{x:6,y:6,width:12,height:12,rx:1}))
+                  :h('svg',{width:12,height:12,viewBox:'0 0 24 24',fill:'none',
+                      stroke:'currentColor',strokeWidth:2},h('polygon',{points:'5,3 19,12 5,21'}))
+              ),
+              // Screw demo
+              h('button',{
+                  onClick:()=>{
+                    const next=!demoMode;
+                    setDemoMode(next);
+                    if(next){setSim(false);clearInterval(simRef.current);setSimP(0);
+                      setBubbleDemo(false);
+                      setScrews(randomScrews());}
+                  },
+                  style:{padding:'5px 10px',borderRadius:'8px',
+                    border:`1px solid ${demoMode?'rgba(251,191,36,0.4)':'#1e293b'}`,
+                    background:demoMode?'rgba(251,191,36,0.15)':'rgba(15,25,41,0.6)',
+                    color:demoMode?'#fbbf24':'#475569',
+                    fontSize:'11px',fontWeight:600,cursor:'pointer'}},
+                demoMode?'Stop':'Screws'),
+              // Bubble demo (v3.5) -- toggle on, then drag the bull's-eye
+              h('button',{onClick:toggleBubbleDemo,disabled:isConnected,
+                  style:{padding:'5px 10px',borderRadius:'8px',
+                    border:`1px solid ${bubbleDemo?'rgba(251,191,36,0.4)':'#1e293b'}`,
+                    background:bubbleDemo?'rgba(251,191,36,0.15)':'rgba(15,25,41,0.6)',
+                    color:bubbleDemo?'#fbbf24':'#475569',
+                    fontSize:'11px',fontWeight:600,
+                    cursor:isConnected?'not-allowed':'pointer',
+                    opacity:isConnected?0.3:1}},
+                bubbleDemo?'Stop':'Bubble'),
+              // Connect
+              h('button',{onClick:isConnected?disconnect:connect,disabled:isConnecting,
+                  style:{padding:'6px 12px',borderRadius:'8px',
+                    background:isConnected?'#1e293b':'#059669',
+                    color:'white',fontSize:'12px',fontWeight:700,
+                    border:'none',cursor:isConnecting?'not-allowed':'pointer',
+                    opacity:isConnecting?0.5:1,
+                    display:'flex',alignItems:'center',gap:'4px'}},
+                isConnecting
+                  ?h('svg',{className:'spin',width:14,height:14,viewBox:'0 0 24 24',fill:'none'},
+                      h('circle',{cx:12,cy:12,r:10,stroke:'currentColor',strokeWidth:4,opacity:0.25}),
+                      h('path',{d:'M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z',fill:'currentColor',opacity:0.75}))
+                  :null,
+                isConnected?'Disconnect':isConnecting?'Scanning\u2026':'Connect')
+            )
+          )
+        ),
+
+        // Level banner
+        h('div',{style:{borderRadius:'14px',border:'1px solid',padding:'13px 20px',
+            display:'flex',alignItems:'center',justifyContent:'center',gap:'10px',
+            transition:'all 0.3s',
+            borderColor:isLevel?'rgba(52,211,153,0.5)':'rgba(251,191,36,0.3)',
+            background:isLevel?'rgba(5,150,105,0.15)':'rgba(92,64,0,0.15)'}},
+          isLevel
+            ?h(React.Fragment,null,
+                h('svg',{width:22,height:22,viewBox:'0 0 24 24',fill:'none',
+                    stroke:'#34d399',strokeWidth:2.5},
+                  h('path',{strokeLinecap:'round',strokeLinejoin:'round',d:'M5 13l4 4L19 7'})),
+                h('p',{style:{fontSize:'17px',fontWeight:800,letterSpacing:'0.15em',
+                    color:'#34d399',margin:0}},'\u2713  LEVEL'))
+            :h(React.Fragment,null,
+                h('svg',{width:22,height:22,viewBox:'0 0 24 24',fill:'none',
+                    stroke:'#fbbf24',strokeWidth:2},
+                  h('path',{strokeLinecap:'round',strokeLinejoin:'round',
+                    d:'M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z'})),
+                h('p',{style:{fontSize:'17px',fontWeight:800,letterSpacing:'0.12em',
+                    color:'#fbbf24',margin:0}},'ADJUST NEEDED'))
+        ),
+
+        // Bull's-eye
+        h('div',{style:{display:'flex',justifyContent:'center'}},
+          h(BullsEye,{pitch:dPitch,roll:dRoll,threshold:levelThreshold,isLevel,
+              draggable:bubbleDemo,onDrag:(p,r)=>{setBubbleP(p);setBubbleR(r);}})),
+        bubbleDemo&&h('p',{style:{fontSize:'10px',color:'#1e3a5f',textAlign:'center',margin:'-6px 0 0'}},
+          'Drag the bubble to simulate pitch and roll'),
+
+        // Level threshold selector -- matches Digital Level Pro's three options
+        h('div',{style:{display:'flex',justifyContent:'center',gap:'8px'}},
+          THRESHOLD_OPTIONS.map(t=>h('button',{key:t,onClick:()=>setLevelThreshold(t),
+              style:{padding:'6px 14px',borderRadius:'10px',
+                border:`1px solid ${levelThreshold===t?'rgba(52,211,153,0.5)':'#1e293b'}`,
+                background:levelThreshold===t?'rgba(52,211,153,0.15)':'rgba(15,25,41,0.6)',
+                color:levelThreshold===t?'#34d399':'#64748b',
+                fontSize:'12px',fontFamily:'monospace',fontWeight:700,cursor:'pointer'}},
+            `\u00B1${t.toFixed(2)}\u00B0`))),
+
+        // Tilt bars
+        h('div',{style:{background:'rgba(13,17,23,0.7)',borderRadius:'14px',
+            border:'1px solid rgba(30,58,95,0.5)',padding:'14px'}},
+          h('div',{style:{display:'flex',gap:'16px'}},
+            h(TiltBar,{label:'Front / Back',value:dPitch,threshold:levelThreshold,
+                leftLbl:'Front Low',rightLbl:'Front High'}),
+            h(TiltBar,{label:'Left / Right',value:dRoll,threshold:levelThreshold,
+                leftLbl:'Left Low',rightLbl:'Right High'})
+          )
+        ),
+
+        // Screw demo controls
+        demoMode&&h('div',{style:{background:'rgba(13,17,23,0.7)',borderRadius:'14px',
+            border:'1px solid rgba(251,191,36,0.25)',padding:'14px'}},
+          h(ScrewDemoControls,{screws,
+            onChange:(k,v)=>setScrews(j=>({...j,[k]:v})),
+            onReset:()=>setScrews(DEFAULT_SCREWS),
+            onRandom:()=>setScrews(randomScrews())})),
+
+        // Tare
+        h('button',{
+            onClick:async()=>{
+              if(!isConnected){toast('Not connected \u2014 tare not applied');return;}
+              // Sends a single TAR: command (additive, matching DL
+              // Tradesman standard's proven-working pattern) with two
+              // corrections this product specifically needs -- see the
+              // header comment ("New in v1.1") for the full reasoning:
+              //   1. The EMA accumulator is reset alongside the displayed
+              //      state (epRef/erRef, below), not just the display --
+              //      otherwise the next real packet blends the firmware's
+              //      corrected reading into a stale accumulator value and
+              //      the display drifts back off-center.
+              //   2. Roll is negated back (-roll) before being sent, since
+              //      this product negates roll on receipt for display
+              //      (rr=-parseFloat(m[2]) below) but the firmware expects
+              //      its own, non-negated convention. Sending the
+              //      already-negated display value computes the wrong new
+              //      offset and makes the error double with each tap.
+              //      Pitch needs no such correction -- it was never
+              //      negated.
+              if(tareStateRef.current!=='idle'){
+                toast('Tare already in progress\u2026');return;
+              }
+              tareStateRef.current='taring';
+              toast('Taring\u2026');
+              const ok=await send(`TAR:${pitch.toFixed(2)},${(-roll).toFixed(2)}`);
+              tareStateRef.current='idle';
+              if(!ok){
+                toast('Tare failed \u2014 command not sent, try again','error');
+                return;
+              }
+              epRef.current=0;erRef.current=0;
+              setPitch(0);setRoll(0);
+              toast('Tared \u2014 display zeroed','success');
+            },
+            style:{width:'100%',padding:'13px',borderRadius:'14px',
+              border:'1px solid rgba(251,191,36,0.35)',
+              background:'rgba(251,191,36,0.1)',
+              color:'#fbbf24',fontSize:'14px',fontWeight:700,cursor:'pointer'}},
+          'Tare to Current Position'),
+
+        // Calibration (v1.5, ported from Tradesman standard)
+        h('div',{style:{background:'rgba(13,17,23,0.7)',borderRadius:'16px',
+            border:'1px solid rgba(30,58,95,0.5)',overflow:'hidden'}},
+          h('button',{
+              onClick:()=>setShowCal(s=>!s),
+              style:{width:'100%',padding:'14px 16px',display:'flex',
+                alignItems:'center',justifyContent:'space-between',
+                background:'transparent',border:'none',cursor:'pointer'}},
+            h('span',{style:{fontSize:'13px',fontWeight:600,color:'#cbd5e1',
+                display:'flex',alignItems:'center',gap:'8px'}},
+              '\u2699\uFE0F Calibration'),
+            h('span',{style:{fontSize:'12px',color:'#475569'}}, showCal?'\u25B2':'\u25BC')
+          ),
+          showCal&&h('div',{style:{padding:'0 16px 16px',
+              borderTop:'1px solid #1e293b'}},
+            h('div',{style:{height:'12px'}}),
+            (calPhase===0||calPhase===6)&&h('div',{style:{padding:'10px',
+                borderRadius:'10px',background:'rgba(251,191,36,0.1)',
+                border:'1px solid rgba(251,191,36,0.3)'}},
+              h('p',{style:{fontSize:'11px',fontWeight:700,color:'#fbbf24',margin:'0 0 4px'}},
+                'Two-position method \u2014 no flat reference needed:'),
+              h('ol',{style:{fontSize:'11px',color:'#cbd5e1',margin:0,paddingLeft:'18px'}},
+                h('li',null,'Place on any stable surface and tap Start'),
+                h('li',null,'Hold still during countdown and sampling'),
+                h('li',null,h('strong',null,'Rotate exactly 180\u00B0'),' end-for-end'),
+                h('li',null,'Tap Sample Position 2 and hold still')
+              )
+            ),
+            h('div',{style:{display:'flex',alignItems:'center',gap:'6px',
+                fontSize:'11px',color:'#64748b',marginTop:'10px'}},
+              [{n:1,label:'Pos 1'},{n:2,label:'Flip'},{n:3,label:'Pos 2'},{n:4,label:'Done'}].map((s,i)=>{
+                const active=(s.n===1&&calPhase<=2)||(s.n===2&&calPhase===3)||(s.n===3&&(calPhase===4||calPhase===5))||(s.n===4&&calPhase===6);
+                const done=(s.n===1&&calPhase>=3)||(s.n===2&&calPhase>=4)||(s.n===3&&calPhase>=6)||(s.n===4&&calPhase===6);
+                return h(React.Fragment,{key:s.n},
+                  h('span',{style:{padding:'2px 8px',borderRadius:'999px',
+                      border:`1px solid ${done?'rgba(52,211,153,0.4)':active?'rgba(251,191,36,0.4)':'#334155'}`,
+                      background:done?'rgba(52,211,153,0.2)':active?'rgba(251,191,36,0.2)':'transparent',
+                      color:done?'#34d399':active?'#fbbf24':'#64748b'}},s.label),
+                  i<3&&h('span',{style:{flex:1,borderTop:'1px dashed #334155'}})
+                );
+              })
+            ),
+            (calPhase===1||calPhase===4)&&h('div',{style:{textAlign:'center',padding:'12px 0'}},
+              h('p',{style:{fontSize:'40px',fontWeight:700,color:'#fbbf24',margin:0}},countdown),
+              h('p',{style:{fontSize:'11px',color:'#94a3b8',margin:'4px 0 0'}},'Hold still\u2026')
+            ),
+            (calPhase===2||calPhase===5)&&h('div',{style:{textAlign:'center',padding:'12px 0'}},
+              h('p',{style:{fontSize:'11px',color:'#94a3b8',margin:0}},'Sampling\u2026 keep still')
+            ),
+            calPhase===3&&h('div',{style:{padding:'10px',borderRadius:'10px',
+                background:'rgba(96,165,250,0.1)',border:'1px solid rgba(96,165,250,0.3)',
+                textAlign:'center'}},
+              h('p',{style:{fontSize:'13px',fontWeight:700,color:'#93c5fd',margin:0}},'\u2195 Rotate 180\u00B0 now'),
+              h('p',{style:{fontSize:'11px',color:'#94a3b8',margin:'4px 0 0'}},'Flip end-for-end, then tap below')
+            ),
+            calPhase===6&&calOffsets&&h('div',{style:{display:'flex',gap:'10px',marginTop:'10px'}},
+              h('div',{style:{flex:1,padding:'8px',borderRadius:'10px',
+                  background:'rgba(15,25,41,0.6)',textAlign:'center'}},
+                h('p',{style:{fontSize:'10px',color:'#64748b',margin:0}},'Pitch offset'),
+                h('p',{style:{fontSize:'13px',fontFamily:'monospace',color:'#34d399',margin:'2px 0 0'}},
+                  `${calOffsets.pitch>0?'+':''}${calOffsets.pitch.toFixed(2)}\u00B0`)
+              ),
+              h('div',{style:{flex:1,padding:'8px',borderRadius:'10px',
+                  background:'rgba(15,25,41,0.6)',textAlign:'center'}},
+                h('p',{style:{fontSize:'10px',color:'#64748b',margin:0}},'Roll offset'),
+                h('p',{style:{fontSize:'13px',fontFamily:'monospace',color:'#34d399',margin:'2px 0 0'}},
+                  `${calOffsets.roll>0?'+':''}${calOffsets.roll.toFixed(2)}\u00B0`)
+              )
+            ),
+            calPhase===6&&h('p',{style:{textAlign:'center',fontSize:'11px',color:'#34d399',margin:'10px 0 0',lineHeight:1.4}},
+              '\u2713 Calibration applied \u2014 return the level to its original position. Tare afterward to treat that surface as zero.'),
+            h('div',{style:{display:'flex',gap:'10px',marginTop:'12px'}},
+              (calPhase===0||calPhase===6)&&h('button',{
+                  onClick:startCalibration,disabled:!isConnected,
+                  style:{flex:1,padding:'10px',borderRadius:'12px',border:'none',
+                    fontSize:'13px',fontWeight:700,cursor:isConnected?'pointer':'not-allowed',
+                    background:isConnected?'#d97706':'rgba(51,65,85,0.5)',
+                    color:isConnected?'white':'#475569'}},
+                calPhase===6?'Re-Calibrate':'Start'),
+              calPhase===3&&h('button',{
+                  onClick:startPosition2,
+                  style:{flex:1,padding:'10px',borderRadius:'12px',border:'none',
+                    fontSize:'13px',fontWeight:700,cursor:'pointer',
+                    background:'#2563eb',color:'white'}},
+                'Sample Position 2'),
+              calOffsets&&calPhase===6&&h('button',{
+                  onClick:resetCalibration,
+                  style:{padding:'10px 16px',borderRadius:'12px',
+                    border:'1px solid #334155',background:'transparent',
+                    color:'#cbd5e1',fontSize:'13px',fontWeight:600,cursor:'pointer'}},
+                'Reset')
+            ),
+            !isConnected&&h('p',{style:{textAlign:'center',fontSize:'11px',color:'#64748b',margin:'10px 0 0'}},
+              'Connect via BLE to calibrate')
+          )
+        ),
+
+        // Slope / Degree Calculator -- independent of connection state,
+        // same as on the standard product
+        h(SlopeCalculator),
+
+        // Footer
+        h('div',{style:{textAlign:'center',fontSize:'13px',color:'#64748b',paddingTop:'4px'}},
+          h('p',{style:{margin:0}},
+            `Level tolerance \u00B1${levelThreshold.toFixed(2)}\u00B0 \u00B7 \u00A9 Digital Level Tradesman 4 Point \u00B7 v1.11`)
+        )
+      )
+    ),
+    // Toasts
+    h('div',{style:{position:'fixed',bottom:'1.5rem',left:'50%',
+        transform:'translateX(-50%)',zIndex:1000,
+        display:'flex',flexDirection:'column',gap:'8px',
+        alignItems:'center',pointerEvents:'none'}},
+      ts.map(t=>h('div',{key:t.id,className:'toast-in',
+          style:{padding:'8px 18px',borderRadius:'20px',fontSize:'13px',
+            fontWeight:500,boxShadow:'0 4px 20px rgba(0,0,0,0.5)',
+            background:t.type==='error'?'rgba(239,68,68,0.92)':
+              t.type==='success'?'rgba(16,185,129,0.92)':'rgba(30,41,59,0.96)',
+            color:'white'}},t.msg))
+    )
+  );
+}
+
+if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});
+ReactDOM.createRoot(document.getElementById('root')).render(h(App));
+</script>
+</body>
+</html>
